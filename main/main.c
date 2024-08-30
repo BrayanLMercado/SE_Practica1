@@ -5,6 +5,7 @@
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include <stdio.h>
+
 #define BTN_1 16    // $1
 #define BTN_2 17    // $5
 #define BTN_3 22    // $10
@@ -20,10 +21,10 @@ const static gpio_num_t PIN_LEDS[4] = {PIN_LED1, PIN_LED2, PIN_LED3, PIN_LED4};
 static uint16_t saldo = 0;
 static int64_t last_time = 0;
 static int64_t current_time;
-static int64_t time_inactivity = 0;
-static uint8_t flag_ticket = 0;
+//static int64_t time_inactivity = 0;
+//static uint8_t flag_ticket = 0;
 QueueHandle_t handlerQueue;
-static uint8_t flag_finishInsert = 0;
+//static uint8_t flag_finishInsert = 0;
 
 typedef struct Payment
 {
@@ -57,28 +58,26 @@ void app_main(void)
   estado_t current_state = Q1_COIN_WAIT;
   gpios_init();
   handlerQueue = xQueueCreate(10, sizeof(int));
-
   // Corregimos la creación de la tarea para pasar la dirección del puntero
-  xTaskCreate(insert_coins_Task, "Insert_Coins_Task", 2048, &payment, 1, &payment.pxCreatedTask);
+  xTaskCreate(insert_coins_Task, "Insert_Coins_Task", 4096, &payment, 10, &payment.pxCreatedTask);
 
   gpio_install_isr_service(0);
   for (int8_t i = 0; i < 4; i++)
   {
     gpio_isr_handler_add(INPUT_PINS[i], gpio_interrupt_handler, (void *)INPUT_PINS[i]);
   }
-  while (1)
-  {
+  while (1){
     paymentSequence(&current_state, &payment);
-    // vTaskDelay(10 / portTICK_PERIOD_MS);
+    vTaskDelay(10/portTICK_PERIOD_MS);// <--- NO LO CAMBIES
   }
 }
-static void IRAM_ATTR gpio_interrupt_handler(void *args)
-{
+static void IRAM_ATTR gpio_interrupt_handler(void *args){
   int pinNumber = (int)args;
-  int64_t current_time = esp_timer_get_time();
-  if (((current_time - last_time) >= 150000))
+  static uint64_t last=0;
+  //int64_t current_time = esp_timer_get_time();
+  if (((esp_timer_get_time() - last) >= 150000))
   {
-    last_time = current_time;
+    last = esp_timer_get_time();
     xQueueSendFromISR(handlerQueue, &pinNumber, NULL);
   }
 }
@@ -126,11 +125,13 @@ void paymentSequence(estado_t *current_state_t, Payment_t *payment)
     payment->last_time = 0;
     payment->saldo = 0;
     *current_state_t = Q1_COIN_WAIT;
+    vTaskDelay(1/portTICK_PERIOD_MS);
     break;
   case Q1_COIN_WAIT:
     printf("Hola este es el edo 1\n");
     vTaskResume(payment->pxCreatedTask); // activa la tarea
     *current_state_t = Q2_PAYMENT;
+    vTaskDelay(1/portTICK_PERIOD_MS);
     break;
   case Q2_PAYMENT:
     if ((current_time - payment->last_time) >= 2000000 && (payment->saldo > 0))
@@ -139,11 +140,14 @@ void paymentSequence(estado_t *current_state_t, Payment_t *payment)
       *current_state_t = Q3_FULL_PAYMENT;
       printf("Tiempo de inactividad agotado\n");
       printf("Redirigiendo a pago completo con %d\n", payment->saldo);
+      vTaskDelay(1/portTICK_PERIOD_MS);
     }
     else
     {
       *current_state_t = Q2_PAYMENT;
+      vTaskDelay(1/portTICK_PERIOD_MS);
     }
+    vTaskDelay(1/portTICK_PERIOD_MS);
     break;
   case Q3_FULL_PAYMENT:
     if (payment->saldo == 15)
@@ -153,6 +157,7 @@ void paymentSequence(estado_t *current_state_t, Payment_t *payment)
       vTaskDelay(500 / portTICK_PERIOD_MS);
       gpio_set_level(PIN_LEDS[3], 0);
       *current_state_t = Q0_PAYMENT_RESTART; // AL REINICIO
+      vTaskDelay(1/portTICK_PERIOD_MS);
     }
     if ((payment->saldo - 15) > 0)
     {
@@ -160,14 +165,17 @@ void paymentSequence(estado_t *current_state_t, Payment_t *payment)
       vTaskDelay(500 / portTICK_PERIOD_MS);
       gpio_set_level(PIN_LEDS[3], 0);
       *current_state_t = Q4_EXCHANGE; // cambio
+      vTaskDelay(1/portTICK_PERIOD_MS);
     }
     break;
   case Q4_EXCHANGE:
     cambio(payment->saldo, 0, 0, 0);
     *current_state_t = Q0_PAYMENT_RESTART;
+    vTaskDelay(1/portTICK_PERIOD_MS);
     break;
   default:
     *current_state_t = Q0_PAYMENT_RESTART;
+    vTaskDelay(1/portTICK_PERIOD_MS);
     break;
   }
 }
@@ -195,11 +203,10 @@ void insert_coins_Task(void *params)
       case BTN_4: // Botón 4
         saldo += 20;
         break;
-      default:
-        break;
       }
       payment->last_time = current_time; // toma el ultimo valor desde que se detecto un pulso
       payment->saldo += saldo;
+      vTaskDelay(1/portTICK_PERIOD_MS);
     }
   }
 }
@@ -223,7 +230,9 @@ void gpios_init()
   { // botones
     gpio_reset_pin(INPUT_PINS[i]);
     gpio_set_direction(INPUT_PINS[i], GPIO_MODE_INPUT);
-    gpio_set_pull_mode(INPUT_PINS[i], GPIO_PULLUP_ONLY);
+    gpio_pulldown_en(INPUT_PINS[i]);
+    gpio_pullup_dis(INPUT_PINS[i]); // Cambialo si es necesario 
+    //gpio_set_pull_mode(INPUT_PINS[i], GPIO_PULLUP_ONLY);
     gpio_set_intr_type(INPUT_PINS[i], GPIO_INTR_NEGEDGE);
   }
 }
